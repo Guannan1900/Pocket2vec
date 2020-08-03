@@ -11,9 +11,9 @@ class Pocket2VecDataset(Dataset):
     """
     Dataset for pockets for unsupervised graph learning.
     """
-    def __init__(self, data_dir, data_list_dir, features_to_use, threshold, transform=None):
+    def __init__(self, data_dir, pocket_list_dir, features_to_use, threshold, transform=None):
         self.data_dir = data_dir
-        self.pocket_list = read_list_file(data_list_dir)
+        self.pocket_list = read_list_file(pocket_list_dir)
         total_features = ['charge', 'hydrophobicity', 'binding_probability', 'distance_to_center', 'sasa', 'sequence_entropy']
         assert(set(features_to_use).issubset(set(total_features))) # features to use should be subset of ['charge', 'hydrophobicity', 'binding_probability', 'distance_to_center', 'sasa', 'sequence_entropy']
         self.features_to_use = features_to_use
@@ -34,12 +34,11 @@ class Pocket2VecDataset(Dataset):
                                     'THR':0.730,'TRP':3.084,'TYR':1.672,'VAL':0.884}
 
     def __len__(self):
-        return len(self.data_list)
+        return len(self.pocket_list)
 
     def __getitem__(self, idx):
         pocket_name = self.pocket_list[idx]
         pocket_dir = self.data_dir + pocket_name + '/' + pocket_name + '.mol2' # modify this accordingly
-        print(pocket_dir)
         graph_data = self.__read_mol(pocket_dir) # read dataframe as pytorch-geometric graph data
 
         ''' apply transformation if applicable '''
@@ -68,7 +67,6 @@ class Pocket2VecDataset(Dataset):
         if atoms.isnull().values.any():
             print('invalid input data (containing nan):')
             print(mol_path)
-            #print(atoms)
 
         bonds = self.bond_parser(mol_path)
 
@@ -86,14 +84,14 @@ class Pocket2VecDataset(Dataset):
         df_bonds = df_bonds.replace('ar', '1') # aromatic
         df_bonds = df_bonds.replace('du', '1') # dummy
         df_bonds = df_bonds.replace('un', '1') # unknown
-        df_bonds = df_bonds.replace('nc', '0') # not connected
+        df_bonds = df_bonds.replace('nc', '0') # not connected by bond
         df_bonds = df_bonds.replace('\n',' ')
         df_bonds = np.array([int(x) for x in df_bonds.split()]).reshape((-1,4)) # convert the the elements to integer
         df_bonds = pd.DataFrame(df_bonds, columns=['bond_id', 'atom1', 'atom2', 'bond_type'])
         df_bonds.set_index(['bond_id'], inplace=True)
         return df_bonds
 
-    def compute_edge_attr(self, edge_index, bonds):
+    def __compute_edge_attr(self, edge_index, bonds):
         """
         Compute the edge attributes according to the chemical bonds. 
         """
@@ -143,7 +141,7 @@ class Pocket2VecDataset(Dataset):
         A_dist[threshold_condition] = 0 # set the element whose value is larger than threshold to 0
         result = np.where(A_dist > 0)
         result = np.vstack((result[0],result[1]))
-        edge_attr = self.compute_edge_attr(result, bonds)
+        edge_attr = self.__compute_edge_attr(result, bonds)
         edge_attr = torch.tensor(edge_attr, dtype=torch.float)
         edge_index = torch.tensor(result, dtype=torch.long)
         node_features = torch.tensor(atoms[self.features_to_use].to_numpy(), dtype=torch.float32)
@@ -177,6 +175,16 @@ def read_list_file(file_dir):
     return pocket_list
 
 
+def gen_loaders(data_dir, pocket_list_dir, features_to_use, threshold, batch_size, shuffle=True, num_workers=1):
+    """
+    Function to generate dataloader for unsupervised learning.
+    """
+    dataset = Pocket2VecDataset(data_dir=data_dir, pocket_list_dir=pocket_list_dir, features_to_use=features_to_use, threshold=threshold)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
+
+    return dataloader, len(dataset)
+
+
 if __name__=="__main__":
     """
     main function used for testing only.
@@ -187,7 +195,15 @@ if __name__=="__main__":
     features_to_use = ['charge', 'hydrophobicity', 'binding_probability', 'distance_to_center']
     threshold = 4.5
 
-    dataset = Pocket2VecDataset(data_dir=pocket_dir, data_list_dir=pocket_list_dir, features_to_use=features_to_use, threshold=threshold)
-    print(dataset[0])
+    dataloader, dataset_length = gen_loaders(data_dir=pocket_dir, 
+                                 pocket_list_dir=pocket_list_dir, 
+                                 features_to_use=features_to_use,
+                                 threshold=threshold,
+                                 batch_size=4, 
+                                 shuffle=True, 
+                                 num_workers=4)
 
+    for data in dataloader:
+        print(data)
+        break
 
